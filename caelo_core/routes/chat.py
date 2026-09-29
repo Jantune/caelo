@@ -33,7 +33,7 @@ import json
 import logging
 import threading
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
 
 import config  # type: ignore
 
@@ -41,7 +41,7 @@ from caelo_core import chat_media_tools, responses_client
 from caelo_core import validation as V
 from caelo_core.errors import masked_error
 from caelo_core.routes._ws import WsStream
-from caelo_core.state import ws_authorized
+from caelo_core.state import Backend, get_backend, ws_authorized
 
 log = logging.getLogger(__name__)
 
@@ -109,7 +109,7 @@ async def chat_stream(ws: WebSocket) -> None:
             # M10-B5: wiedza projektu NIE idzie przez serwerowy file_search (xAI go nie
             # ma — 404). Dokumenty projektu user dołącza do wiadomości na żądanie
             # („Attach all"), więc trafiają tu już jako bloki `document` w `messages`.
-            tools = responses_client.build_search_tools(search_mode, sources)
+            tools = responses_client.build_search_tools(search_mode, sources, model=model)
             # M14-B2: narzędzia MCP (lokalne) jako function-calling + (B3) native remote
             # MCP. Czat NIE ma interaktywnego modala zatwierdzeń (to ma agent — F2), więc
             # polityka czatu: READONLY działa; MUTUJĄCE tylko gdy WCZEŚNIEJ dopuszczone na
@@ -119,12 +119,18 @@ async def chat_stream(ws: WebSocket) -> None:
             remote_tools = backend.mcp.remote_tool_blocks()
             # M20: narzędzia generowania mediów (obraz/wideo) jako function-calling czatu —
             # Grok robi to natywnie, ale Responses API nie ma serwerowego image-gen.
-            media_tools = list(chat_media_tools.MEDIA_TOOL_DEFS) if config.CHAT_MEDIA_TOOLS else []
-            fn_tools = (mcp_fn_tools or []) + media_tools
+            is_ma = V.is_multi_agent(model)
+            if is_ma:
+                # Modele multi-agent nie obsługują narzędzi po stronie klienta (xAI beta required).
+                # Wykluczamy ambientne narzędzia mediów i lokalne MCP, by nie wywołać błędu 400.
+                fn_tools = []
+            else:
+                media_tools = list(chat_media_tools.MEDIA_TOOL_DEFS) if config.CHAT_MEDIA_TOOLS else []
+                fn_tools = (mcp_fn_tools or []) + media_tools
             # Fallback na legacy dotyczy CZYSTEGO czatu (search/MCP/remote nie istnieją w
             # legacy chat/completions). Narzędzia mediów są AMBIENTNE (zawsze dołączone) i
             # NIE blokują fallbacku — plain Q&A może spaść na legacy mimo ich dostępności.
-            has_tools = bool(tools or mcp_fn_tools or remote_tools)
+            has_tools = bool(tools or (mcp_fn_tools if not is_ma else []) or remote_tools)
 
             def mcp_tool_handler(name: str, args: dict) -> str:
                 mgr = backend.mcp
@@ -263,9 +269,9 @@ async def chat_stream(ws: WebSocket) -> None:
                             log.warning("Could not load project instructions", exc_info=True)
                     if system_prompt:
                         messages = [{"role": "system", "content": system_prompt}] + messages
-                    model = msg.get("model") or backend.read_settings().get(
+                    model = V.normalize_model(msg.get("model") or backend.read_settings().get(
                         "chat_model"
-                    ) or config.DEFAULT_CHAT_MODEL
+                    ) or config.DEFAULT_CHAT_MODEL)
                     try:
                         temperature = float(msg.get("temperature", 0.7))
                     except (TypeError, ValueError):
@@ -299,3 +305,30 @@ async def chat_stream(ws: WebSocket) -> None:
             # (≤5 s) i domknie sender — bez czytania z xAI po rozłączeniu.
             if current["stop"] is not None:
                 current["stop"].set()
+
+
+@router.get("/chat/prompt_models")
+def get_prompt_models(b: Backend = Depends(get_backend)) -> dict:
+    """Zwraca mapowanie {prompt: model} z historii huba do wstecznego uzupełnienia
+    modelu w istniejących rozmowach na frontendzie."""
+    store = getattr(b, "history_store", None)
+    if store is None:
+        return {}
+    out: dict[str, str] = {}
+    try:
+        with store._lock:
+            cur = store._conn.execute(
+                "SELECT meta FROM history_fts WHERE meta LIKE '%\"model\"%'"
+            )
+            for row in cur:
+                try:
+                    meta = json.loads(row[0]) if row[0] else {}
+                    prompt = (meta.get("prompt") or "").strip()
+                    model = (meta.get("model") or "").strip()
+                    if prompt and model and prompt not in out:
+                        out[prompt] = model
+                except Exception:
+                    continue
+    except Exception as exc:
+        log.warning("Could not load prompt models: %s", exc)
+    return out

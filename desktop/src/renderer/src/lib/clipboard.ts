@@ -1,8 +1,16 @@
-// Odporne kopiowanie tekstu do schowka. `navigator.clipboard` bywa niedostępny albo
-// odrzuca (brak fokusu okna / kontekst nie-secure w niektórych buildach Electrona),
-// więc spadamy na ukryty <textarea> + document.execCommand('copy'). Zwraca true przy
-// sukcesie.
+// Odporne kopiowanie tekstu do schowka:
+// 1. Natywne API Electrona (najbardziej niezawodne w aplikacji desktopowej)
+// 2. Standardowe Web API navigator.clipboard
+// 3. Fallback: ukryty <textarea> + document.execCommand('copy')
 export async function copyText(text: string): Promise<boolean> {
+  if (typeof window !== 'undefined' && window.caelo?.writeClipboard) {
+    try {
+      const ok = await window.caelo.writeClipboard(text)
+      if (ok) return true
+    } catch {
+      /* przechodzimy do fallbacku poniżej */
+    }
+  }
   try {
     if (navigator.clipboard?.writeText) {
       await navigator.clipboard.writeText(text)

@@ -21,7 +21,9 @@ export function useConversations(): {
   saveError: string | null
   setActiveId: (id: string) => void
   patchActive: (updater: (c: Conversation) => Conversation) => void
-  createChat: (projectId?: string | null) => void
+  patchConvo: (id: string, updater: (c: Conversation) => Conversation) => void
+  patchConvos: (updater: (list: Conversation[]) => Conversation[]) => void
+  createChat: (projectId?: string | null, model?: string) => void
   deleteChat: (id: string) => void
 } {
   const [convos, setConvos] = useState<Conversation[]>([])
@@ -92,8 +94,16 @@ export function useConversations(): {
     setConvos((prev) => prev.map((c) => (c.id === activeId ? updater(c) : c)))
   }
 
-  function createChat(projectId?: string | null): void {
-    const c = newConversation(projectId)
+  function patchConvo(id: string, updater: (c: Conversation) => Conversation): void {
+    setConvos((prev) => prev.map((c) => (c.id === id ? updater(c) : c)))
+  }
+
+  function patchConvos(updater: (list: Conversation[]) => Conversation[]): void {
+    setConvos(updater)
+  }
+
+  function createChat(projectId?: string | null, model?: string): void {
+    const c = newConversation(projectId, model)
     setConvos((prev) => [c, ...prev])
     setActiveId(c.id)
   }
@@ -107,5 +117,16 @@ export function useConversations(): {
     if (id === activeId) setActiveId(list[0].id)
   }
 
-  return { convos, activeId, active, saveError, setActiveId, patchActive, createChat, deleteChat }
+  return {
+    convos,
+    activeId,
+    active,
+    saveError,
+    setActiveId,
+    patchActive,
+    patchConvo,
+    patchConvos,
+    createChat,
+    deleteChat
+  }
 }

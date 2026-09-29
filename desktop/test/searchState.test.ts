@@ -7,7 +7,9 @@ import {
   citationHost,
   citationLabel,
   formatUsage,
-  formatCostUsd
+  formatCostUsd,
+  formatTokens,
+  usageTooltip
 } from '../src/renderer/src/lib/searchState'
 
 describe('searchActivityLabel', () => {
@@ -116,5 +118,32 @@ describe('formatCostUsd', () => {
   it('uses 4dp under a cent, 2dp above (4.1-g)', () => {
     expect(formatCostUsd(0.0234)).toBe('$0.0234')
     expect(formatCostUsd(1.5)).toBe('$1.50')
+  })
+})
+
+describe('formatTokens', () => {
+  it('formats raw, k, and M properly', () => {
+    expect(formatTokens(500)).toBe('500')
+    expect(formatTokens(1200)).toBe('1.2k')
+    expect(formatTokens(15000)).toBe('15k')
+    expect(formatTokens(1337463)).toBe('1.34M')
+    expect(formatTokens(10500000)).toBe('10.5M')
+  })
+})
+
+describe('usageTooltip', () => {
+  it('generates multi-line breakdown', () => {
+    const tip = usageTooltip({
+      total_tokens: 1337463,
+      input_tokens: 1310208,
+      output_tokens: 27255,
+      cached_tokens: 920060,
+      reasoning_tokens: 26759,
+      cost_usd: 0.15
+    })
+    expect(tip).toContain('Total: 1,337,463 tokens')
+    expect(tip).toContain('Input: 1,310,208 tokens (920k cached)')
+    expect(tip).toContain('Output: 27,255 tokens (27k reasoning)')
+    expect(tip).toContain('Cost: $0.15')
   })
 })

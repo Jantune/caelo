@@ -10,6 +10,7 @@ import {
 import { Group, Panel, useDefaultLayout, usePanelRef } from 'react-resizable-panels'
 import {
   ArrowUp,
+  Check,
   Copy,
   Download,
   ExternalLink,
@@ -20,14 +21,18 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Plus,
+  RotateCw,
   Search,
   SlidersHorizontal,
   Square,
   Volume2,
   X
 } from 'lucide-react'
+import { copyText } from '../lib/clipboard'
 import {
   getArtifactContentUrl,
+  getChatPromptModels,
+  listHistory,
   type ChatArtifact,
   type ChatMessage,
   type Conn,
@@ -42,7 +47,8 @@ import {
   citationLabel,
   dedupeCitations,
   formatUsage,
-  searchActivityLabel
+  searchActivityLabel,
+  usageTooltip
 } from '../lib/searchState'
 import { inputBlockToAttachment } from '../lib/sendTo'
 import { expandTemplate, filterSlashCommands, matchSlash, slashQuery } from '../lib/slashCommands'
@@ -55,7 +61,7 @@ import { appendDictation, useDictation } from '../lib/useDictation'
 import { useTts } from '../lib/useTts'
 import { AttachButton, AttachmentChips } from './Attachments'
 import { ProjectSwitcher } from './ProjectSwitcher'
-import { conversationsForProject, titleFromText } from '../lib/storage'
+import { conversationsForProject, titleFromText, type Conversation } from '../lib/storage'
 import { cn } from '../lib/cn'
 import { Markdown } from './Markdown'
 import { Button } from './ui/Button'
@@ -255,10 +261,19 @@ const ChatMessageRow = memo(function ChatMessageRow({
   basedOnDocument: boolean
   streaming?: boolean
   conn: Conn
-  onCopy: (content: string) => void
+  onCopy: (content: string) => Promise<boolean>
   onSpeak: (idx: number, content: string) => void
 }) {
   const m = message
+  const [copied, setCopied] = useState(false)
+  const handleCopy = async (text: string) => {
+    const ok = await onCopy(text)
+    if (ok) {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    }
+  }
+
   if (m.role === 'user') {
     return (
       <div className="flex justify-end">
@@ -273,12 +288,12 @@ const ChatMessageRow = memo(function ChatMessageRow({
           ) : null}
           {m.content ? (
             <button
-              onClick={() => onCopy(m.content)}
-              aria-label="Copy message"
+              onClick={() => handleCopy(m.content)}
+              aria-label={copied ? 'Copied' : 'Copy message'}
               className="absolute -right-1 -top-1 flex h-6 w-6 items-center justify-center rounded-md bg-surface text-muted opacity-0 shadow-sm outline-none transition-opacity hover:text-fg focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-accent group-hover:opacity-100"
-              title="Copy"
+              title={copied ? 'Copied' : 'Copy'}
             >
-              <Copy size={13} />
+              {copied ? <Check size={13} className="text-accent" /> : <Copy size={13} />}
             </button>
           ) : null}
         </div>
@@ -290,6 +305,14 @@ const ChatMessageRow = memo(function ChatMessageRow({
       <div className="mb-2 flex items-center gap-2 text-xs font-semibold text-muted">
         <BrandMark size={20} />
         Caelo
+        {m.model ? (
+          <span
+            className="rounded-md bg-surface-2 px-1.5 py-0.5 text-[10px] font-normal text-muted"
+            title={`Model: ${m.model}`}
+          >
+            {m.model}
+          </span>
+        ) : null}
         {basedOnDocument ? (
           <span
             className="flex items-center gap-1 rounded-md bg-surface-2 px-1.5 py-0.5 text-[10px] font-medium text-muted"
@@ -342,7 +365,12 @@ const ChatMessageRow = memo(function ChatMessageRow({
         </div>
       ) : null}
       {m.usage && formatUsage(m.usage) ? (
-        <div className="mt-2 text-[11px] text-muted">{formatUsage(m.usage)}</div>
+        <div
+          className="mt-2 text-[11px] text-muted cursor-help"
+          title={usageTooltip(m.usage)}
+        >
+          {formatUsage(m.usage)}
+        </div>
       ) : null}
       {m.content ? (
         <div className="absolute right-0 top-0 flex items-center gap-1 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
@@ -355,12 +383,20 @@ const ChatMessageRow = memo(function ChatMessageRow({
             {isSpeaking ? <Square size={13} /> : <Volume2 size={13} />}
           </button>
           <button
-            onClick={() => onCopy(m.content)}
-            aria-label="Copy message"
+            onClick={() => handleCopy(m.content)}
+            aria-label={copied ? 'Copied' : 'Copy message'}
             className="flex h-7 items-center gap-1 rounded-md px-2 text-xs text-muted outline-none hover:bg-surface-2 hover:text-fg focus-visible:ring-2 focus-visible:ring-accent"
-            title="Copy"
+            title={copied ? 'Copied' : 'Copy'}
           >
-            <Copy size={13} /> Copy
+            {copied ? (
+              <>
+                <Check size={13} className="text-accent" /> Copied
+              </>
+            ) : (
+              <>
+                <Copy size={13} /> Copy
+              </>
+            )}
           </button>
         </div>
       ) : null}
@@ -370,7 +406,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
 
 export function ChatView({ conn }: { conn: Conn }) {
   const [input, setInput] = useState('')
-  const [error, setError] = useState<string | null>(null)
+  const [errors, setErrors] = useState<Record<string, string | null>>({})
   const [dragging, setDragging] = useState(false) // M9-F4: drop plików do composera
   const [slashIdx, setSlashIdx] = useState(0) // M14-F3: aktywny element listy komend
 
@@ -384,7 +420,7 @@ export function ChatView({ conn }: { conn: Conn }) {
   const [sources, setSources] = useState<string[]>(['web', 'x'])
   // M19-B9: reasoning_effort dla czatu ('' = Auto → backend użyje chat_effort).
   const [effort, setEffort] = useState<ReasoningEffort>('')
-  const [searchActivity, setSearchActivity] = useState<ToolEvent | null>(null)
+  const [searchActivities, setSearchActivities] = useState<Record<string, ToolEvent | null>>({})
 
   // Voice: czytanie odpowiedzi na głos (TTS → useTts); dyktowanie promptu (STT → useDictation).
   const [defaultVoice, setDefaultVoice] = useState('eve')
@@ -392,8 +428,8 @@ export function ChatView({ conn }: { conn: Conn }) {
   // S35-i: auto-scroll tylko gdy user przy dole + przycisk „Jump to bottom".
   const { scrollRef, atBottom, onScroll, scrollToBottom } = useStickToBottom()
   const taRef = useRef<HTMLTextAreaElement | null>(null)
-  // P2-11: historia ostatniej tury (do „Retry" po błędzie streamingu).
-  const lastTurnRef = useRef<ChatMessage[] | null>(null)
+  // P2-11: historia ostatniej tury per-konwersacja (do „Retry" po błędzie streamingu).
+  const lastTurnsRef = useRef<Record<string, ChatMessage[]>>({})
 
   // P2-2: współdzielony cache zamiast osobnych GET-ów /models i /settings.
   const { models: modelsResp } = useModels(conn)
@@ -404,7 +440,10 @@ export function ChatView({ conn }: { conn: Conn }) {
   const convo = useConversations()
   const att = useAttachments()
   const hub = useHub()
-  const stream = useChatStream(conn)
+  const stream = useChatStream(conn, convo.activeId)
+
+  const error = convo.activeId ? errors[convo.activeId] || null : null
+  const searchActivity = convo.activeId ? searchActivities[convo.activeId] || null : null
   const tts = useTts(conn, defaultVoice)
   const dictation = useDictation(conn, (t) => {
     setInput((prev) => appendDictation(prev, t))
@@ -450,16 +489,42 @@ export function ChatView({ conn }: { conn: Conn }) {
     scrollToBottom()
   }, [convo.active?.messages, scrollToBottom])
 
-  // P1-H: wyzeruj stan przejściowy „na poziomie komponentu" przy zmianie aktywnej
-  // rozmowy. Bez tego pasek błędu i `lastTurnRef` z rozmowy A żyły po przełączeniu na B,
-  // a „Retry" streamował odpowiedź (z historią A) do rozmowy B. Czyścimy też `searchActivity`
-  // (ten sam rodzaj zatrzymanego transientu). Strumień „w locie" NIE jest naprawiany — jego
-  // handlery domykają send-time `convo` i poprawnie trafiają do rozmowy źródłowej.
+  // Przełącz model na model powiązany z tą rozmową.
   useEffect(() => {
-    setError(null)
-    setSearchActivity(null)
-    lastTurnRef.current = null
-  }, [convo.activeId])
+    if (convo.active) {
+      const activeModel =
+        convo.active.model ||
+        convo.active.messages.find((m) => m.model)?.model
+      if (activeModel) {
+        setModel(activeModel)
+      }
+    }
+  }, [convo.activeId, convo.active?.model])
+
+  // Wsteczne uzupełnienie modelu dla starszych rozmów z bazy SQLite (GET /chat/prompt_models).
+  useEffect(() => {
+    getChatPromptModels(conn)
+      .then((map) => {
+        if (!map || Object.keys(map).length === 0) return
+        convo.patchConvos((prev) =>
+          prev.map((c) => {
+            if (c.model) return c
+            const firstUser = c.messages.find((m) => m.role === 'user')?.content?.trim()
+            if (!firstUser) return c
+            const matched = map[firstUser]
+            if (!matched) return c
+            return {
+              ...c,
+              model: matched,
+              messages: c.messages.map((m) =>
+                m.role === 'assistant' && !m.model ? { ...m, model: matched } : m
+              )
+            }
+          })
+        )
+      })
+      .catch(() => undefined)
+  }, [conn])
 
   // M9-F2: „Send to → Chat / Describe" — podnieś artefakt jako załącznik (vision),
   // a dla „Describe" wstaw podpowiedź promptu (bez kasowania tekstu użytkownika).
@@ -485,24 +550,147 @@ export function ChatView({ conn }: { conn: Conn }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hub.composerDraft])
 
+  // Otwarcie/odzyskanie konkretnego zdarzenia czatu z History (M9-B2).
+  useEffect(() => {
+    const pe = hub.pendingChatEvent
+    if (!pe) return
+    hub.setPendingChatEvent(null)
+
+    const prompt = (pe.meta?.prompt as string)?.trim() || ''
+    const answer = pe.text?.trim() || ''
+    const found = convo.convos.find((c) => {
+      if (c.id === pe.id) return true
+      if (prompt) {
+        const firstUser = c.messages.find((m) => m.role === 'user')?.content?.trim()
+        if (firstUser && firstUser === prompt) return true
+      }
+      if (answer) {
+        const hasAns = c.messages.some((m) => m.role === 'assistant' && m.content?.trim() === answer)
+        if (hasAns) return true
+      }
+      return false
+    })
+
+    if (found) {
+      convo.setActiveId(found.id)
+      return
+    }
+
+    const userPrompt = prompt || (pe.text ? titleFromText(pe.text) : 'Conversation')
+    const turnModel = (pe.meta?.model as string) || undefined
+    const citations = Array.isArray(pe.meta?.citations)
+      ? pe.meta.citations.map((u) => (typeof u === 'string' ? { url: u } : (u as { url: string })))
+      : undefined
+    const usage = (pe.meta?.usage as ChatMessage['usage']) || undefined
+    const newC: Conversation = {
+      id: pe.id,
+      title: titleFromText(userPrompt),
+      created: (pe.created_at || Date.now() / 1000) * 1000,
+      project_id: pe.project_id ?? null,
+      model: turnModel,
+      messages: [
+        ...(prompt ? [{ role: 'user' as const, content: prompt }] : []),
+        { role: 'assistant' as const, content: pe.text || '', model: turnModel, citations, usage }
+      ]
+    }
+
+    convo.patchConvos((prev) => {
+      const filtered = prev.filter((c) => c.id !== pe.id && !(c.title === 'New chat' && c.messages.length === 0))
+      return [newC, ...filtered]
+    })
+    convo.setActiveId(newC.id)
+  }, [hub.pendingChatEvent, hub, convo])
+
+  const [syncingHistory, setSyncingHistory] = useState(false)
+
+  const syncFromHistory = useCallback(async () => {
+    if (!conn) return
+    setSyncingHistory(true)
+    try {
+      const res = await listHistory(conn, { mode: 'chat', limit: 100 })
+      if (!res.events?.length) return
+      let firstImportedId: string | null = null
+      convo.patchConvos((prev) => {
+        const existingIds = new Set(prev.map((c) => c.id))
+        const existingPrompts = new Set(
+          prev.map((c) => c.messages.find((m) => m.role === 'user')?.content?.trim()).filter(Boolean)
+        )
+        const toAdd: Conversation[] = []
+        for (const ev of res.events) {
+          if (existingIds.has(ev.id)) continue
+          const prompt = typeof ev.meta?.prompt === 'string' ? ev.meta.prompt.trim() : ''
+          if (prompt && existingPrompts.has(prompt)) continue
+          const userPrompt = prompt || (ev.text ? titleFromText(ev.text) : 'Conversation')
+          const turnModel = (ev.meta?.model as string) || undefined
+          const citations = Array.isArray(ev.meta?.citations)
+            ? ev.meta.citations.map((u) => (typeof u === 'string' ? { url: u } : (u as { url: string })))
+            : undefined
+          const usage = (ev.meta?.usage as ChatMessage['usage']) || undefined
+          toAdd.push({
+            id: ev.id,
+            title: titleFromText(userPrompt),
+            created: (ev.created_at || Date.now() / 1000) * 1000,
+            project_id: ev.project_id ?? null,
+            model: turnModel,
+            messages: [
+              ...(prompt ? [{ role: 'user' as const, content: prompt }] : []),
+              { role: 'assistant' as const, content: ev.text || '', model: turnModel, citations, usage }
+            ]
+          })
+          if (prompt) existingPrompts.add(prompt)
+          existingIds.add(ev.id)
+        }
+        if (toAdd.length === 0) return prev
+        firstImportedId = toAdd[0].id
+        const filtered = prev.filter((c) => !(c.title === 'New chat' && c.messages.length === 0))
+        return [...toAdd, ...filtered].sort((a, b) => b.created - a.created)
+      })
+      if (
+        firstImportedId &&
+        (!convo.active || (convo.active.title === 'New chat' && convo.active.messages.length === 0))
+      ) {
+        convo.setActiveId(firstImportedId)
+      }
+    } catch {
+      /* ignore */
+    } finally {
+      setSyncingHistory(false)
+    }
+  }, [conn, convo])
+
+  const syncInitRef = useRef(false)
+  useEffect(() => {
+    if (!conn || syncInitRef.current) return
+    syncInitRef.current = true
+    syncFromHistory()
+  }, [conn, syncFromHistory])
+
   /** Uruchamia turę dla danej historii (wspólne dla send i retry). Dba o pusty
    *  bąbel asystenta do streamowania i NIE utrwala błędu jako treści (P2-11). */
-  function runTurn(history: ChatMessage[]): void {
-    lastTurnRef.current = history
-    setError(null)
-    setSearchActivity(null)
-    convo.patchActive((c) => {
+  function runTurn(history: ChatMessage[], targetId = convo.activeId): void {
+    if (!targetId) return
+    lastTurnsRef.current[targetId] = history
+    setErrors((prev) => ({ ...prev, [targetId]: null }))
+    setSearchActivities((prev) => ({ ...prev, [targetId]: null }))
+    const targetConvo = convo.convos.find((c) => c.id === targetId)
+    const turnModel = targetConvo?.model || model
+    convo.patchConvo(targetId, (c) => {
       const last = c.messages[c.messages.length - 1]
       // Dodaj pusty bąbel asystenta tylko jeśli go jeszcze nie ma (retry po błędzie).
       return last && last.role === 'assistant'
-        ? c
-        : { ...c, messages: [...c.messages, { role: 'assistant', content: '' }] }
+        ? { ...c, model: turnModel, messages: patchLastAssistant(c.messages, { model: turnModel }) }
+        : {
+            ...c,
+            model: turnModel,
+            messages: [...c.messages, { role: 'assistant', content: '', model: turnModel }]
+          }
     })
 
     stream.start(
+      targetId,
       {
         messages: toApiMessages(history),
-        model,
+        model: turnModel,
         temperature,
         system_prompt: systemPrompt,
         // M10-B2: live-search mode + sources (sources only matter when searching).
@@ -513,36 +701,48 @@ export function ChatView({ conn }: { conn: Conn }) {
       },
       {
         onDelta: (full) =>
-          convo.patchActive((c) => ({ ...c, messages: updateLastAssistant(c.messages, full) })),
+          convo.patchConvo(targetId, (c) => ({ ...c, messages: updateLastAssistant(c.messages, full) })),
         // M10-F1: live-search activity → transient "Searching…" indicator.
-        onTool: (ev) => setSearchActivity(ev),
+        onTool: (ev) => setSearchActivities((prev) => ({ ...prev, [targetId]: ev })),
         // M10-F2/F6: attach sources + usage to the streaming assistant message.
         onCitations: (cits) =>
-          convo.patchActive((c) => ({
+          convo.patchConvo(targetId, (c) => ({
             ...c,
             messages: patchLastAssistant(c.messages, { citations: dedupeCitations(cits) })
           })),
         onUsage: (usage) =>
-          convo.patchActive((c) => ({
+          convo.patchConvo(targetId, (c) => ({
             ...c,
             messages: patchLastAssistant(c.messages, { usage })
           })),
         // M20: media generated mid-turn (generate_image) → show inline under the answer.
         onArtifact: (art) =>
-          convo.patchActive((c) => ({
+          convo.patchConvo(targetId, (c) => ({
             ...c,
             messages: appendArtifactToLastAssistant(c.messages, art)
           })),
         onDone: (full) => {
-          setSearchActivity(null)
-          convo.patchActive((c) => ({ ...c, messages: updateLastAssistant(c.messages, full) }))
+          setSearchActivities((prev) => {
+            const next = { ...prev }
+            delete next[targetId]
+            return next
+          })
+          convo.patchConvo(targetId, (c) => ({
+            ...c,
+            model: turnModel,
+            messages: patchLastAssistant(updateLastAssistant(c.messages, full), { model: turnModel })
+          }))
         },
         onError: (err) => {
           // P2-11: pokaż błąd w pasku (z „Retry") zamiast zapisywać „⚠️ …" jako
           // odpowiedź asystenta; usuń pusty bąbel, by historia została czysta.
-          setError(err)
-          setSearchActivity(null)
-          convo.patchActive((c) => {
+          setErrors((prev) => ({ ...prev, [targetId]: err }))
+          setSearchActivities((prev) => {
+            const next = { ...prev }
+            delete next[targetId]
+            return next
+          })
+          convo.patchConvo(targetId, (c) => {
             const msgs = c.messages.slice()
             const last = msgs[msgs.length - 1]
             if (last && last.role === 'assistant' && !last.content) msgs.pop()
@@ -565,6 +765,9 @@ export function ChatView({ conn }: { conn: Conn }) {
   }
 
   function send(): void {
+    const targetId = convo.activeId
+    if (!targetId) return
+
     let text = input.trim()
     // M14-F3: jeśli to komenda slash — rozwiń szablon (lub odpal akcję klienta).
     const matched = matchSlash(text)
@@ -579,16 +782,17 @@ export function ChatView({ conn }: { conn: Conn }) {
         text = expandTemplate(cmd.template, matched.rest)
       }
     }
-    if ((!text && att.attachments.length === 0) || stream.streaming) return
+    if ((!text && att.attachments.length === 0) || stream.isStreaming(targetId)) return
 
     const userMsg: ChatMessage = {
       role: 'user',
       content: text,
       attachments: att.attachments.length ? att.attachments : undefined
     }
-    const history = [...(convo.active?.messages || []), userMsg]
+    const currentConvo = convo.convos.find((c) => c.id === targetId) || convo.active
+    const history = [...(currentConvo?.messages || []), userMsg]
 
-    convo.patchActive((c) => ({
+    convo.patchConvo(targetId, (c) => ({
       ...c,
       title:
         c.title === 'New chat'
@@ -600,16 +804,22 @@ export function ChatView({ conn }: { conn: Conn }) {
     att.clear()
     if (taRef.current) taRef.current.style.height = 'auto'
 
-    runTurn(history)
+    runTurn(history, targetId)
   }
 
   function retry(): void {
-    if (stream.streaming || !lastTurnRef.current) return
-    runTurn(lastTurnRef.current)
+    const targetId = convo.activeId
+    if (!targetId) return
+    const lastTurn = lastTurnsRef.current[targetId]
+    if (stream.isStreaming(targetId) || !lastTurn) return
+    runTurn(lastTurn, targetId)
   }
 
   function onModelChange(value: string): void {
     setModel(value)
+    if (convo.activeId) {
+      convo.patchConvo(convo.activeId, (c) => ({ ...c, model: value }))
+    }
     void saveSettings(conn, { chat_model: value }).catch(() => undefined)
   }
 
@@ -651,7 +861,7 @@ export function ChatView({ conn }: { conn: Conn }) {
 
   function newChat(): void {
     // M22: nowa rozmowa należy do aktywnego projektu czatu (lub „bez projektu").
-    convo.createChat(hub.currentProjectId)
+    convo.createChat(hub.currentProjectId, model || settings?.chat_model)
     setInput('')
   }
 
@@ -693,12 +903,8 @@ export function ChatView({ conn }: { conn: Conn }) {
 
   // Stabilny callback (P2-4) — wiersze czatu są zmemoizowane, więc onCopy nie może
   // zmieniać tożsamości między renderami (TTS przez stabilne `tts.speak` z useTts).
-  const copyMessage = useCallback(async (content: string): Promise<void> => {
-    try {
-      await navigator.clipboard.writeText(content)
-    } catch {
-      /* ignore */
-    }
+  const copyMessage = useCallback(async (content: string): Promise<boolean> => {
+    return await copyText(content)
   }, [])
 
   const messages = convo.active?.messages || []
@@ -726,20 +932,28 @@ export function ChatView({ conn }: { conn: Conn }) {
         style={{ overflow: 'hidden' }}
         className="flex min-h-0 flex-col bg-surface"
       >
-        <div className="shrink-0 p-2.5">
+        <div className="shrink-0 flex items-center gap-1.5 p-2.5">
           <Button
             variant="subtle"
-            className="w-full justify-start"
+            className="flex-1 justify-start"
             icon={<Plus size={16} />}
             onClick={newChat}
           >
             New chat
           </Button>
+          <IconButton
+            label="Sync chats from history"
+            icon={<RotateCw size={15} className={syncingHistory ? 'animate-spin' : ''} />}
+            tooltip
+            tooltipSide="right"
+            onClick={syncFromHistory}
+          />
         </div>
         <div className="flex-1 overflow-y-auto px-2 pb-2">
           {/* M22: lista rozmów zawężona do aktywnego projektu czatu („All projects" = wszystkie). */}
           {conversationsForProject(convo.convos, hub.currentProjectId).map((c) => {
             const isActive = c.id === convo.activeId
+            const isRunning = stream.isStreaming(c.id)
             return (
               <div
                 key={c.id}
@@ -752,14 +966,26 @@ export function ChatView({ conn }: { conn: Conn }) {
                 <button
                   onClick={() => convo.setActiveId(c.id)}
                   aria-current={isActive ? 'true' : undefined}
-                  className="min-w-0 flex-1 truncate rounded-lg px-2.5 py-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                  className="flex min-w-0 flex-1 items-center justify-between gap-1.5 truncate rounded-lg px-2.5 py-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-accent"
                 >
-                  {c.title}
+                  <span className="truncate">{c.title}</span>
+                  {isRunning ? (
+                    <span
+                      className="relative flex h-2 w-2 shrink-0"
+                      title="Generating response…"
+                    >
+                      <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-accent opacity-75"></span>
+                      <span className="relative inline-flex h-2 w-2 rounded-full bg-accent"></span>
+                    </span>
+                  ) : null}
                 </button>
                 <button
                   aria-label={`Delete chat: ${c.title}`}
                   title="Delete"
-                  onClick={() => convo.deleteChat(c.id)}
+                  onClick={() => {
+                    stream.stop(c.id)
+                    convo.deleteChat(c.id)
+                  }}
                   className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-muted opacity-0 outline-none transition-opacity hover:text-error focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-accent group-hover:opacity-100"
                 >
                   <X size={14} />
@@ -990,7 +1216,7 @@ export function ChatView({ conn }: { conn: Conn }) {
         {displayError ? (
           <div className="flex items-center justify-center gap-2 px-4 pb-1 text-xs text-error">
             <span>{displayError}</span>
-            {error && !stream.streaming && lastTurnRef.current ? (
+            {error && !stream.streaming && convo.activeId && lastTurnsRef.current[convo.activeId] ? (
               <button
                 onClick={retry}
                 className="rounded px-1.5 py-0.5 font-medium text-error underline outline-none hover:opacity-80 focus-visible:ring-2 focus-visible:ring-accent"
@@ -1106,7 +1332,7 @@ export function ChatView({ conn }: { conn: Conn }) {
             </button>
             {stream.streaming ? (
               <button
-                onClick={stream.stop}
+                onClick={() => stream.stop(convo.activeId)}
                 aria-label="Stop generating"
                 title="Stop"
                 className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-error text-white outline-none transition-opacity hover:opacity-90 focus-visible:ring-2 focus-visible:ring-accent"

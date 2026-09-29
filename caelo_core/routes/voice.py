@@ -298,7 +298,7 @@ async def voice_converse(ws: WebSocket) -> None:
             if sys_prompt:
                 messages = [{"role": "system", "content": sys_prompt}] + messages
             messages = messages + [{"role": "user", "content": transcript}]
-            tools = responses_client.build_search_tools(search_mode, sources)
+            tools = responses_client.build_search_tools(search_mode, sources, model=model)
 
             def on_delta(delta: str, _full: str) -> None:
                 if not stream.emit({"type": "delta", "delta": delta}):

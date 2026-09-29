@@ -47,8 +47,23 @@ def list_history(
         q=q, mode=mode, project_id=project_id, since=from_, until=to,
         limit=limit, offset=offset,
     )
-    return {"events": [e.to_dict() for e in events],
+    dicts = [e.to_dict() for e in events]
+    metas = b.history_store.event_metas([d["id"] for d in dicts])
+    for d in dicts:
+        d["meta"] = metas.get(d["id"], {})
+    return {"events": dicts,
             "limit": limit, "offset": offset, "count": len(events)}
+
+
+@router.get("/history/{event_id}")
+def get_history_event(event_id: str, b: Backend = Depends(get_backend)) -> dict:
+    ev = b.history_store.get_event(event_id)
+    if ev is None:
+        raise HTTPException(status_code=404, detail="Event not found")
+    d = ev.to_dict()
+    metas = b.history_store.event_metas([event_id])
+    d["meta"] = metas.get(event_id, {})
+    return d
 
 
 def _iso(ts) -> str:

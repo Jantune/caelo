@@ -23,7 +23,8 @@ describe('modelSupportsEffort', () => {
       'grok-4-fast',
       'grok-build-0.1',
       'grok-3',
-      'grok-4.20-0309-non-reasoning'
+      'grok-4.20-0309-non-reasoning',
+      'grok-chat-fast'
     ]) {
       expect(modelSupportsEffort(m)).toBe(false)
     }

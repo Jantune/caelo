@@ -24,7 +24,7 @@ function fmtTime(epoch: number): string {
 }
 
 export function History({ conn }: { conn: Conn }) {
-  const { navigate, currentProjectId } = useHub()
+  const { navigate, currentProjectId, openChatEvent } = useHub()
   const [q, setQ] = useState('')
   const [mode, setMode] = useState('all')
   const [events, setEvents] = useState<HubEvent[]>([])
@@ -59,6 +59,10 @@ export function History({ conn }: { conn: Conn }) {
 
   const openInMode = (e: HubEvent): void => {
     const target = modeToModule(e.mode)
+    if (target === 'Chat') {
+      openChatEvent(e)
+      return
+    }
     if (target) navigate(target)
   }
 

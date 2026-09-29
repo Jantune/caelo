@@ -425,26 +425,49 @@ class HistoryStore:
             rows = self._conn.execute(sql, params).fetchall()
         return [self._row_to_event(r) for r in rows]
 
+    def get_event(self, event_id: str) -> Optional[HistoryEvent]:
+        """Zwróć pojedyncze zdarzenie historii po ID lub None."""
+        if not event_id:
+            return None
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM history_events WHERE id = ?", (event_id,)
+            ).fetchone()
+        return self._row_to_event(row) if row else None
+
     def event_metas(self, event_ids: Sequence[str]) -> dict[str, dict]:
         """M19-B10: zwróć `{event_id: meta}` dla podanych zdarzeń. `meta` żyje w
-        `history_fts` (nie w dataclass HistoryEvent), więc czytamy je tu — używane
-        przez eksport historii do markdown (prompt/model w meta). Jeden przebieg
-        kursora z wczesnym zakończeniem (FTS5 bez MATCH = pełny skan; export rzadki)."""
-        want = {str(i) for i in event_ids if i}
+        `history_fts` (nie w dataclass HistoryEvent). Używa sparametryzowanego IN
+        dla typowych list (<= 500) lub pojedynczego skanu z wczesnym wyjściem."""
+        want = [str(i) for i in event_ids if i]
         if not want:
             return {}
+        want_set = set(want)
         out: dict[str, dict] = {}
         with self._lock:
-            cur = self._conn.execute("SELECT event_id, meta FROM history_fts")
-            for row in cur:
-                eid = row["event_id"]
-                if eid in want and eid not in out:
+            if len(want_set) <= 500:
+                placeholders = ",".join("?" * len(want_set))
+                cur = self._conn.execute(
+                    f"SELECT event_id, meta FROM history_fts WHERE event_id IN ({placeholders})",
+                    list(want_set),
+                )
+                for row in cur:
+                    eid = row["event_id"]
                     try:
                         out[eid] = json.loads(row["meta"]) if row["meta"] else {}
                     except Exception:  # noqa: BLE001
                         out[eid] = {}
-                    if len(out) == len(want):
-                        break
+            else:
+                cur = self._conn.execute("SELECT event_id, meta FROM history_fts")
+                for row in cur:
+                    eid = row["event_id"]
+                    if eid in want_set and eid not in out:
+                        try:
+                            out[eid] = json.loads(row["meta"]) if row["meta"] else {}
+                        except Exception:  # noqa: BLE001
+                            out[eid] = {}
+                        if len(out) == len(want_set):
+                            break
         return out
 
     # --- pamięć semantyczna: embeddingi + KNN + hybryda (M19-B8) ---------------

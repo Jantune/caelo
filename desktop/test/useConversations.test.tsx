@@ -100,3 +100,29 @@ describe('useConversations — patchActive celuje w aktywną rozmowę (P1-H)', (
     expect(B?.messages?.[0]?.content).toBe('do-B') // zapis do B nie wyciekł do A
   })
 })
+
+describe('useConversations — patchConvo mutuje wskazaną rozmowę niezależnie od activeId', () => {
+  beforeEach(() => localStorage.clear())
+
+  it('patchConvo(idA) mutuje rozmowę A, nawet gdy aktywne jest B', () => {
+    const { result } = renderHook(() => useConversations())
+
+    act(() => {
+      result.current.createChat()
+    })
+    const idB = result.current.activeId
+    const idA = result.current.convos.find((c) => c.id !== idB)?.id as string
+
+    act(() => {
+      result.current.patchConvo(idA, (c) => ({
+        ...c,
+        messages: [{ role: 'assistant', content: 'chunk for A' }]
+      }))
+    })
+
+    const A = result.current.convos.find((c) => c.id === idA)
+    const B = result.current.convos.find((c) => c.id === idB)
+    expect(A?.messages?.[0]?.content).toBe('chunk for A')
+    expect(B?.messages?.length).toBe(0)
+  })
+})

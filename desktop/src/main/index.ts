@@ -1,9 +1,37 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron'
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeTheme, shell } from 'electron'
 import { spawn, execFileSync, ChildProcess } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { createInterface } from 'node:readline'
+
+/** Ścieżka pliku zapisu motywu w userData, by proces główny znał motyw przed utworzeniem okna. */
+function themeConfigPath(): string {
+  return join(app.getPath('userData'), 'theme.json')
+}
+
+function loadSavedTheme(): 'light' | 'dark' | 'system' {
+  try {
+    const file = themeConfigPath()
+    if (existsSync(file)) {
+      const parsed = JSON.parse(readFileSync(file, 'utf-8'))
+      if (parsed?.theme === 'light' || parsed?.theme === 'dark' || parsed?.theme === 'system') {
+        return parsed.theme
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+  return 'system'
+}
+
+function saveTheme(theme: 'light' | 'dark' | 'system'): void {
+  try {
+    writeFileSync(themeConfigPath(), JSON.stringify({ theme }), 'utf-8')
+  } catch {
+    /* ignore */
+  }
+}
 
 // Linia handshake wypisywana przez sidecara (patrz caelo_core/__main__.py).
 const HANDSHAKE_PREFIX = '__CAELO_CORE_READY__'
@@ -369,7 +397,7 @@ function createWindow(): void {
     minWidth: 1100,
     minHeight: 720,
     show: false,
-    backgroundColor: '#0f1323',
+    backgroundColor: nativeTheme.shouldUseDarkColors ? '#0f1323' : '#ffffff',
     title: 'Caelo',
     icon: windowIcon(),
     webPreferences: {
@@ -413,7 +441,13 @@ function createWindow(): void {
   // bez niego nic nie robi). Inne (geolokalizacja, powiadomienia, MIDI…) — odmowa
   // zamiast domyślnego auto-grantu dla treści na pętli zwrotnej.
   mainWindow.webContents.session.setPermissionRequestHandler((_wc, permission, callback) => {
-    callback(permission === 'media' || permission === 'fullscreen')
+    callback(
+      permission === 'media' ||
+      permission === 'fullscreen' ||
+      (permission as string) === 'clipboard-write' ||
+      permission === 'clipboard-sanitized-write' ||
+      permission === 'clipboard-read'
+    )
   })
 
   // Sprawdzanie pisowni: języki wg USTAWIEŃ SYSTEMU (np. polski na polskim Windowsie),
@@ -533,6 +567,40 @@ ipcMain.handle('shell:openPath', async (_event, target: string) => {
   return shell.openPath(target)
 })
 
+// Bezpośredni zapis do schowka systemowego przez proces główny.
+ipcMain.handle('clipboard:writeText', async (_event, text: string) => {
+  try {
+    clipboard.writeText(text)
+    return true
+  } catch (err) {
+    console.error('[main] clipboard:writeText failed:', err)
+    return false
+  }
+})
+
+// Obsługa motywu (aktualizuje natywny pasek tytułu Windows/macOS i tło okna).
+ipcMain.handle('theme:set', (_event, mode: 'light' | 'dark' | 'system') => {
+  if (mode === 'light' || mode === 'dark' || mode === 'system') {
+    nativeTheme.themeSource = mode
+    saveTheme(mode)
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.setBackgroundColor(nativeTheme.shouldUseDarkColors ? '#0f1323' : '#ffffff')
+    }
+    return true
+  }
+  return false
+})
+
+ipcMain.handle('theme:get', () => {
+  return nativeTheme.themeSource
+})
+
+nativeTheme.on('updated', () => {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.setBackgroundColor(nativeTheme.shouldUseDarkColors ? '#0f1323' : '#ffffff')
+  }
+})
+
 /** M15-8: auto-aktualizacja przez electron-updater + GitHub Releases (najpierw Windows).
  *  `electron-updater` to OPCJONALNA zależność runtime — ładujemy ją przez `require`
  *  w try/catch, więc brak pakietu (przed `npm install electron-updater`) nie wywraca
@@ -591,6 +659,8 @@ function initAutoUpdate(): void {
 }
 
 app.whenReady().then(() => {
+  // Ustaw motyw PRZED utworzeniem okna, by Windows DWM od razu narysował pasek w ciemnym motywie.
+  nativeTheme.themeSource = loadSavedTheme()
   if (process.platform === 'win32') app.setAppUserModelId('com.caelo.desktop')
   // Usuń pasek menu aplikacji (File/Edit/View/Window) na Windows/Linux — niepotrzebny
   // (nawigacja jest w UI). Skróty edycji w polach tekstowych działają i bez menu

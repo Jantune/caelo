@@ -16,6 +16,9 @@ declare global {
       onCoreStatus: (callback: (status: CoreConnection) => void) => () => void
       selectFolder: () => Promise<string | null>
       openPath: (path: string) => Promise<string>
+      writeClipboard: (text: string) => Promise<boolean>
+      setTheme?: (mode: 'light' | 'dark' | 'system') => Promise<boolean>
+      getTheme?: () => Promise<'light' | 'dark' | 'system'>
     }
   }
 }

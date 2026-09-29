@@ -4,6 +4,7 @@ import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
 import { ArtifactFrame } from './ArtifactFrame'
 import { isArtifactLang } from '../lib/artifacts'
+import { copyText } from '../lib/clipboard'
 
 // TOP5: rehype-highlight tokenizuje treść bloku na zagnieżdżone <span> — by zbudować artefakt
 // potrzebujemy SUROWEGO kodu, więc rekonstruujemy go z liści tekstowych drzewa React.
@@ -20,12 +21,10 @@ function CodeBlock({ className, children }: { className?: string; children?: Rea
   const text = String(children ?? '')
   const lang = (className || '').replace('hljs language-', '').replace('language-', '')
   const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(text.replace(/\n$/, ''))
+    const ok = await copyText(text.replace(/\n$/, ''))
+    if (ok) {
       setCopied(true)
       setTimeout(() => setCopied(false), 1200)
-    } catch {
-      /* ignore */
     }
   }
   return (

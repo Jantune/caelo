@@ -17,7 +17,18 @@ const caeloApi = {
   selectFolder: (): Promise<string | null> => ipcRenderer.invoke('dialog:selectFolder'),
 
   /** Otwiera plik/folder w domyślnej aplikacji systemu. */
-  openPath: (path: string): Promise<string> => ipcRenderer.invoke('shell:openPath', path)
+  openPath: (path: string): Promise<string> => ipcRenderer.invoke('shell:openPath', path),
+
+  /** Kopiuje tekst do schowka systemowego przez natywny proces główny. */
+  writeClipboard: (text: string): Promise<boolean> => ipcRenderer.invoke('clipboard:writeText', text),
+
+  /** Ustawia motyw w procesie głównym (aktualizuje natywny pasek tytułu Windows/macOS). */
+  setTheme: (mode: 'light' | 'dark' | 'system'): Promise<boolean> =>
+    ipcRenderer.invoke('theme:set', mode),
+
+  /** Pobiera bieżący motyw z procesu głównego. */
+  getTheme: (): Promise<'light' | 'dark' | 'system'> =>
+    ipcRenderer.invoke('theme:get')
 }
 
 contextBridge.exposeInMainWorld('caelo', caeloApi)

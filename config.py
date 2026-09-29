@@ -20,7 +20,7 @@ _LEGACY_APP_NAME = "AI Studio Pro"
 APP_VERSION = "1.1"
 
 # --- API Configuration ---
-API_BASE = "https://api.x.ai/v1"
+API_BASE = "http://127.0.0.1:8000/v1"
 
 # --- paths ---
 BASE_DIR = Path(__file__).resolve().parent
@@ -327,6 +327,8 @@ DEFAULT_CHAT_MODELS = [
     "grok-4.20-0309-non-reasoning",
     "grok-4.20-0309-reasoning",
     "grok-4.20-multi-agent-0309",
+    "grok-chat-fast",
+    "grok-composer-2.5-fast",
     "grok-build-0.1",
     "grok-4",
     "grok-3",

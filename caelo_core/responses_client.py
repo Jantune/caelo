@@ -53,6 +53,7 @@ def _headers(api_key: str) -> dict:
 def build_search_tools(
     mode: str = "auto",
     sources: Optional[List[str]] = None,
+    model: Optional[str] = None,
 ) -> Optional[List[dict]]:
     """Zbuduj listę narzędzi live-search dla żądania Responses.
 
@@ -60,6 +61,7 @@ def build_search_tools(
     - `mode in {"on","auto"}` → narzędzia dla wybranych źródeł.
     - `sources`: podzbiór {"web","x","news"} (None = web + x). „news" idzie przez
       `web_search` (xAI nie ma osobnego narzędzia news — to filtr web).
+    - `model`: identyfikator modelu (np. grok-chat-fast nie wspiera narzędzia x_search).
 
     Trzymamy definicje MINIMALNE (`{"type": ...}`) — bez spekulatywnych pól
     (max_results/daty), które mogłyby dać 422 na realnym API; rozbudowa po
@@ -71,7 +73,8 @@ def build_search_tools(
     if "web" in sources or "news" in sources:
         tools.append({"type": "web_search"})
     if "x" in sources:
-        tools.append({"type": "x_search"})
+        if V.supports_x_search(model):
+            tools.append({"type": "x_search"})
     return tools or None
 
 
@@ -291,9 +294,18 @@ def stream_response(
     """
     api_key = api_key_provider()
     base = base or config.API_BASE
+    model = V.normalize_model(model)
 
     server_tools = list(tools or []) + list(remote_tools or [])
-    flat_fns = [_to_responses_function(d) for d in (function_tools or [])]
+    if not V.supports_x_search(model):
+        server_tools = [t for t in server_tools if t.get("type") != "x_search"]
+    if V.is_multi_agent(model):
+        # Modele multi-agent (np. grok-4.20-multi-agent-0309) nie wspierają client-side tools
+        # bez dostępu beta (xAI zwraca 400: Client-side tools for multi-agent models require beta access).
+        # Narzędzia serwerowe (web_search, x_search) działają bez przeszkód.
+        flat_fns = []
+    else:
+        flat_fns = [_to_responses_function(d) for d in (function_tools or [])]
     all_tools = server_tools + flat_fns
 
     input_items = to_input(messages)
@@ -317,25 +329,69 @@ def stream_response(
         # pole jest obecne — docs.x.ai). Wyślij tylko gdy poprawny i — gdy serwer odrzuci
         # (400/422) — PONÓW raz bez niego (best-effort: tura nie pada na modelu bez wsparcia).
         eff = V.normalize_effort(reasoning_effort)
-        if all_tools:
-            payload["tools"] = all_tools
-            if tool_choice and with_tool_choice:
-                payload["tool_choice"] = tool_choice
+        current_tools = list(all_tools)
         output_items: List[dict] = []
 
-        def _open(send_effort: bool):
+        def _open(send_effort: bool, use_tools: list):
             body = dict(payload)
+            if use_tools:
+                body["tools"] = use_tools
+                if tool_choice and with_tool_choice:
+                    body["tool_choice"] = tool_choice
+            elif "tools" in body:
+                del body["tools"]
+                body.pop("tool_choice", None)
             if send_effort and eff:
                 body["reasoning"] = {"effort": eff}
             return requests.post(f"{base}/responses", headers=_headers(api_key), json=body,
                                  stream=True, timeout=TIMEOUT_RESPONSES)
 
-        r = _open(bool(eff))
+        r = _open(bool(eff), current_tools)
         if eff and getattr(r, "status_code", 200) in (400, 422):
             log.info("model %s rejected reasoning.effort=%s (HTTP %s) — retrying without it",
                      model, eff, getattr(r, "status_code", "?"))
             r.close()
-            r = _open(False)
+            r = _open(False, current_tools)
+
+        # Obrona 1: Odrzucenie x_search przez model (np. grok-chat-fast zwraca 400 upstream_stream_incomplete)
+        if current_tools and getattr(r, "status_code", 200) in (400, 422):
+            if any(t.get("type") == "x_search" for t in current_tools):
+                log.info("model %s failed with x_search (HTTP %s) — retrying without x_search",
+                         model, getattr(r, "status_code", "?"))
+                r.close()
+                current_tools = [t for t in current_tools if t.get("type") != "x_search"]
+                r = _open(bool(eff), current_tools)
+                if eff and getattr(r, "status_code", 200) in (400, 422):
+                    r.close()
+                    r = _open(False, current_tools)
+
+        # Obrona 2: Odrzucenie narzędzi po stronie klienta (np. multi-agent 400 Client-side tools)
+        if current_tools and getattr(r, "status_code", 200) in (400, 422):
+            err_text = ""
+            try:
+                err_text = r.text
+            except Exception:
+                pass
+            if "client-side tools" in err_text.lower() or "beta access" in err_text.lower() or V.is_multi_agent(model):
+                log.info("model %s rejected client-side tools (HTTP %s) — retrying with server tools only",
+                         model, getattr(r, "status_code", "?"))
+                r.close()
+                current_tools = [t for t in server_tools if t.get("type") != "x_search"] if not V.supports_x_search(model) else list(server_tools)
+                r = _open(bool(eff), current_tools)
+                if eff and getattr(r, "status_code", 200) in (400, 422):
+                    r.close()
+                    r = _open(False, current_tools)
+
+        # Obrona 3: Odrzucenie wszystkich narzędzi (ogólny fallback zapobiegający crashowi tury czatu)
+        if current_tools and getattr(r, "status_code", 200) in (400, 422):
+            log.info("model %s rejected tools (HTTP %s) — retrying with no tools",
+                     model, getattr(r, "status_code", "?"))
+            r.close()
+            current_tools = []
+            r = _open(bool(eff), current_tools)
+            if eff and getattr(r, "status_code", 200) in (400, 422):
+                r.close()
+                r = _open(False, current_tools)
         with r:
             r.raise_for_status()
             for raw in r.iter_lines(decode_unicode=False):

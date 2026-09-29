@@ -13,6 +13,7 @@ export function modelSupportsEffort(model: string): boolean {
   const m = (model || '').toLowerCase().trim()
   if (!m) return true
   if (m.includes('non-reasoning')) return false // np. grok-4.20-0309-non-reasoning
+  if (m.includes('chat-fast') || m.includes('chatfast')) return false // grok-chat-fast
   if (m.startsWith('grok-build')) return false // grok-build-0.1
   if (m === 'grok-4' || m.startsWith('grok-4-')) return false // grok-4 family (NIE grok-4.x)
   if (m.startsWith('grok-3') && !m.includes('mini')) return false // grok-3 (tylko -mini wspiera)

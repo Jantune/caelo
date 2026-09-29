@@ -28,6 +28,46 @@ def normalize_effort(value) -> Optional[str]:
     return v if v in REASONING_EFFORTS else None
 
 
+def normalize_model(model: Optional[str]) -> str:
+    """Znormalizuj identyfikator modelu lub alias do kanonicznej nazwy."""
+    if not model:
+        return ""
+    m = model.strip()
+    m_lower = m.lower()
+    # Aliases for multi-agent
+    if m_lower in ("multi agent 0309", "multi-agent-0309", "multi agent", "multi-agent", "grok-multi-agent"):
+        return "grok-4.20-multi-agent-0309"
+    if m_lower in ("0309 reasoning", "0309-reasoning", "grok-0309-reasoning"):
+        return "grok-4.20-0309-reasoning"
+    if m_lower in ("0309 non-reasoning", "0309-non-reasoning", "grok-0309-non-reasoning"):
+        return "grok-4.20-0309-non-reasoning"
+    # Aliases for grok-chat-fast
+    if m_lower in ("chat-fast", "chat fast", "grok chat fast", "grok-chat-fast", "grok fast", "chatfast"):
+        return "grok-chat-fast"
+    return m
+
+
+def is_multi_agent(model: Optional[str]) -> bool:
+    """Czy dany model jest modelem typu multi-agent (brak wsparcia dla client-side tools)."""
+    if not model:
+        return False
+    m = model.strip().lower()
+    return "multi-agent" in m or "multiagent" in m
+
+
+def is_chat_fast(model: Optional[str]) -> bool:
+    """Czy dany model jest modelem grok-chat-fast (szybki czat, brak wsparcia dla x_search)."""
+    if not model:
+        return False
+    m = model.strip().lower()
+    return "chat-fast" in m or "chatfast" in m
+
+
+def supports_x_search(model: Optional[str]) -> bool:
+    """Czy dany model wspiera narzędzie x_search (grok-chat-fast zwraca błąd 400)."""
+    return not is_chat_fast(model)
+
+
 # Limity (sekundy/sztuki/znaki).
 MAX_PROMPT = 8000           # długość promptu (obraz/wideo)
 MAX_IMAGES = 8              # liczba obrazów referencyjnych w jednej edycji

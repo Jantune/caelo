@@ -11,6 +11,8 @@ export interface Conversation {
   /** M22: projekt czatu, do którego należy rozmowa. Brak/undefined = bez projektu
    *  (widoczna pod „All projects"). Stare rozmowy (przed M22) nie mają tego pola. */
   project_id?: string | null
+  /** Model wybrany/użyty w tej rozmowie. */
+  model?: string
   messages: ChatMessage[]
 }
 
@@ -73,8 +75,15 @@ function uid(): string {
   return 'c_' + Math.floor(performance.now()).toString(36) + Math.floor(performance.now() * 7).toString(36)
 }
 
-export function newConversation(projectId?: string | null): Conversation {
-  return { id: uid(), title: 'New chat', created: Date.now(), project_id: projectId ?? null, messages: [] }
+export function newConversation(projectId?: string | null, model?: string): Conversation {
+  return {
+    id: uid(),
+    title: 'New chat',
+    created: Date.now(),
+    project_id: projectId ?? null,
+    model: model || undefined,
+    messages: []
+  }
 }
 
 /** M22: rozmowy należące do projektu czatu. `projectId === null` → „All projects"

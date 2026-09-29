@@ -155,7 +155,7 @@ async def agent_stream(ws: WebSocket) -> None:
                     images = msg.get("images") or []
                     # M13: tryb agenta (ask/accept-edits/plan/bypass); wstecznie „plan":true.
                     mode = msg.get("mode") or ("plan" if msg.get("plan") else "ask")
-                    model = (
+                    model = V.normalize_model(
                         msg.get("model")
                         or backend.read_settings().get("code_model")
                         or "grok-build-0.1"

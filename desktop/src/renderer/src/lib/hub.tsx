@@ -21,6 +21,7 @@ import {
   selectProject as apiSelectProject,
   updateProject as apiUpdateProject,
   type Conn,
+  type HubEvent,
   type HubProject,
   type InputBlock,
   type SlashCommand
@@ -64,6 +65,12 @@ interface HubState {
   setPendingSend: (p: PendingSend | null) => void
   /** Ustaw transfer i od razu przejdź do trybu docelowego (skrót dla F2). */
   sendTo: (p: PendingSend) => void
+
+  /** Oczekujące zdarzenie czatu do otwarcia/odzyskania w panelu Chat. */
+  pendingChatEvent: HubEvent | null
+  setPendingChatEvent: Dispatch<SetStateAction<HubEvent | null>>
+  /** Otwórz konkretne zdarzenie czatu w panelu Chat. */
+  openChatEvent: (e: HubEvent) => void
 
   // --- Staged media (M11): przetrwają zmianę zakładki (panele są leniwe) ---
   /** Referencje obrazu w panelu Image (edycja/warianty, do 3). */
@@ -143,6 +150,7 @@ export function HubProvider({
   const [composerDraft, setComposerDraft] = useState<string | null>(null)
   const [codeSessionId, setCodeSessionId] = useState<string | null>(null)
   const [promptReuse, setPromptReuse] = useState<PromptReuse | null>(null)
+  const [pendingChatEvent, setPendingChatEvent] = useState<HubEvent | null>(null)
 
   const reloadProjects = useCallback(() => {
     if (!conn) return
@@ -232,6 +240,12 @@ export function HubProvider({
         setPendingSend(p)
         navigate(p.target)
       },
+      pendingChatEvent,
+      setPendingChatEvent,
+      openChatEvent: (e: HubEvent) => {
+        setPendingChatEvent(e)
+        navigate('Chat')
+      },
       imageRefs,
       setImageRefs,
       videoFrame,
@@ -273,6 +287,7 @@ export function HubProvider({
     [
       navigate,
       pendingSend,
+      pendingChatEvent,
       imageRefs,
       videoFrame,
       videoRefs,

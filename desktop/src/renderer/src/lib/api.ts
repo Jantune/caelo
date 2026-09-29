@@ -28,12 +28,18 @@ export interface ChatUsage {
   tool_calls?: number
   input_tokens?: number
   output_tokens?: number
+  total_tokens?: number
+  cached_tokens?: number
+  reasoning_tokens?: number
+  input_tokens_details?: { cached_tokens?: number }
+  output_tokens_details?: { reasoning_tokens?: number }
   cost_usd?: number // 4.1-g: REAL cost from xAI usage.cost_in_usd_ticks (absent = no real cost)
 }
 
 export interface ChatMessage {
   role: 'user' | 'assistant' | 'system'
   content: string
+  model?: string // Model that generated this message
   attachments?: ChatAttachment[]
   citations?: Citation[] // live-search sources (assistant messages)
   usage?: ChatUsage // tool calls + tokens for this turn (assistant messages)
@@ -236,6 +242,8 @@ export const getSandboxStatus = (c: Conn): Promise<SandboxStatus> =>
   api<SandboxStatus>(c, '/sandbox/status')
 
 export const getModels = (c: Conn): Promise<ModelsResp> => api<ModelsResp>(c, '/models')
+export const getChatPromptModels = (c: Conn): Promise<Record<string, string>> =>
+  api<Record<string, string>>(c, '/chat/prompt_models')
 export const getSettings = (c: Conn): Promise<SettingsResp> => api<SettingsResp>(c, '/settings')
 export const getAuthStatus = (c: Conn): Promise<AuthResp> => api<AuthResp>(c, '/auth/status')
 export const putSettings = (c: Conn, patch: SettingsPatch): Promise<{ ok: boolean }> =>
@@ -497,6 +505,15 @@ export interface HubEvent {
   artifact_id: string | null
   project_id: string | null
   created_at: number // epoch seconds
+  meta?: {
+    prompt?: string
+    model?: string
+    search_mode?: string
+    tool_calls?: number
+    usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number; [key: string]: unknown }
+    citations?: (string | { url: string; title?: string; snippet?: string })[]
+    [key: string]: unknown
+  }
 }
 
 export interface HubArtifact {
@@ -565,6 +582,9 @@ export const listHistory = (
   query: HistoryQuery = {}
 ): Promise<{ events: HubEvent[]; count: number; limit: number; offset: number }> =>
   api(c, '/history' + queryString(query as Record<string, string | number | undefined>))
+
+export const getHistoryEvent = (c: Conn, eventId: string): Promise<HubEvent> =>
+  api(c, `/history/${encodeURIComponent(eventId)}`)
 
 export const listArtifacts = (
   c: Conn,

@@ -18,6 +18,7 @@ export function installBrowserMock(): void {
     getCore: () => Promise.resolve(conn),
     onCoreStatus: () => () => undefined,
     selectFolder: () => Promise.resolve(null),
-    openPath: () => Promise.resolve('')
+    openPath: () => Promise.resolve(''),
+    writeClipboard: () => Promise.resolve(true)
   }
 }

@@ -55,4 +55,20 @@ describe('ThemeProvider / useTheme', () => {
     expect(document.documentElement).not.toHaveClass('dark')
     expect(localStorage.getItem('caelo.theme')).toBe('light')
   })
+
+  it('synchronizes theme with window.caelo.setTheme if available', async () => {
+    const mockSetTheme = vi.fn().mockResolvedValue(true)
+    ;(window as unknown as { caelo: unknown }).caelo = {
+      setTheme: mockSetTheme
+    }
+
+    render(
+      <ThemeProvider>
+        <Probe />
+      </ThemeProvider>
+    )
+
+    await userEvent.click(screen.getByRole('button', { name: 'dark' }))
+    expect(mockSetTheme).toHaveBeenCalledWith('dark')
+  })
 })

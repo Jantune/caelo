@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
-import { Copy, Mic, Square, Volume2 } from 'lucide-react'
+import { Check, Copy, Mic, Square, Volume2 } from 'lucide-react'
 import { speechToText, textToSpeech, type Conn } from '../lib/api'
+import { copyText } from '../lib/clipboard'
 import { useModels, useSettings } from '../lib/serverState'
 import { DEFAULT_VOICE, VOICE_LANGUAGES, VOICES } from '../lib/constants'
 import { blobToBase64, MicRecorder } from '../lib/audio'
@@ -281,11 +282,12 @@ export function Voice({ conn }: { conn: Conn }) {
     session.start()
   }
 
+  const [transcriptCopied, setTranscriptCopied] = useState(false)
   async function copyTranscript(): Promise<void> {
-    try {
-      await navigator.clipboard.writeText(transcript)
-    } catch {
-      /* ignore */
+    const ok = await copyText(transcript)
+    if (ok) {
+      setTranscriptCopied(true)
+      setTimeout(() => setTranscriptCopied(false), 1500)
     }
   }
 
@@ -414,8 +416,13 @@ export function Voice({ conn }: { conn: Conn }) {
             <Card className="mt-6">
               <div className="mb-2 flex items-center justify-between">
                 <span className="text-xs font-medium text-muted">Transcript</span>
-                <Button variant="ghost" size="sm" icon={<Copy size={14} />} onClick={copyTranscript}>
-                  Copy
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  icon={transcriptCopied ? <Check size={14} className="text-accent" /> : <Copy size={14} />}
+                  onClick={copyTranscript}
+                >
+                  {transcriptCopied ? 'Copied' : 'Copy'}
                 </Button>
               </div>
               <p className="whitespace-pre-wrap text-sm leading-relaxed">{transcript}</p>

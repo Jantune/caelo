@@ -47,9 +47,18 @@ function applyClass(resolved: Resolved): void {
   root.style.colorScheme = resolved
 }
 
+/** Synchronizuje motyw z procesem głównym Electron (natywny pasek tytułu Windows/macOS). */
+function syncNativeTheme(mode: ThemeMode): void {
+  if (typeof window !== 'undefined' && window.caelo?.setTheme) {
+    void window.caelo.setTheme(mode).catch(() => undefined)
+  }
+}
+
 // Zastosuj zapisany motyw natychmiast przy ładowaniu modułu (przed pierwszym paintem).
 if (typeof document !== 'undefined') {
-  applyClass(resolve(readStored()))
+  const initial = readStored()
+  applyClass(resolve(initial))
+  syncNativeTheme(initial)
 }
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
@@ -66,7 +75,13 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     const r = resolve(mode)
     setResolved(r)
     applyClass(r)
+    syncNativeTheme(mode)
   }, [])
+
+  // Upewnij się, że proces główny zna motyw po zamontowaniu.
+  useEffect(() => {
+    syncNativeTheme(theme)
+  }, [theme])
 
   // Śledź zmianę motywu systemowego, gdy wybrano „system".
   useEffect(() => {

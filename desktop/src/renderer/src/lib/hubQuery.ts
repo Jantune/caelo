@@ -59,8 +59,15 @@ export function buildHistoryQuery(f: HistoryFilters, limit = 100): HistoryQuery 
   return out
 }
 
-/** Tytuł zdarzenia do listy — treść albo fallback z trybu (puste media bez promptu). */
-export function eventTitle(e: { text: string; mode: string }): string {
+/** Tytuł zdarzenia do listy — preferuje prompt użytkownika (meta.prompt),
+ *  inaczej treść odpowiedzi albo fallback z trybu (puste media bez promptu). */
+export function eventTitle(e: {
+  text: string
+  mode: string
+  meta?: Record<string, unknown>
+}): string {
+  const prompt = typeof e.meta?.prompt === 'string' ? e.meta.prompt.trim() : ''
+  if (prompt) return prompt
   const t = (e.text || '').trim()
   return t || `(${e.mode})`
 }

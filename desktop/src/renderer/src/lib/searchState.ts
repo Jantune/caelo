@@ -59,6 +59,7 @@ export function citationLabel(c: Citation): string {
 }
 
 export function formatTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(n >= 10_000_000 ? 1 : 2)}M`
   if (n >= 1000) return `${(n / 1000).toFixed(n >= 10_000 ? 0 : 1)}k`
   return String(n)
 }
@@ -68,6 +69,30 @@ export function formatCostUsd(usd: number): string {
   return `$${usd.toFixed(usd < 1 ? 4 : 2)}`
 }
 
+/** Detailed tooltip breakdown for token usage (total, input/cached, output/reasoning, cost). */
+export function usageTooltip(usage: ChatUsage | undefined): string {
+  if (!usage) return ''
+  const inTok = usage.input_tokens ?? 0
+  const outTok = usage.output_tokens ?? 0
+  const total = usage.total_tokens ?? inTok + outTok
+  const cached = usage.input_tokens_details?.cached_tokens ?? usage.cached_tokens ?? 0
+  const reasoning = usage.output_tokens_details?.reasoning_tokens ?? usage.reasoning_tokens ?? 0
+
+  const lines: string[] = [`Total: ${total.toLocaleString()} tokens`]
+  if (inTok > 0) {
+    const cachedStr = cached > 0 ? ` (${formatTokens(cached)} cached)` : ''
+    lines.push(`Input: ${inTok.toLocaleString()} tokens${cachedStr}`)
+  }
+  if (outTok > 0) {
+    const reasoningStr = reasoning > 0 ? ` (${formatTokens(reasoning)} reasoning)` : ''
+    lines.push(`Output: ${outTok.toLocaleString()} tokens${reasoningStr}`)
+  }
+  if (typeof usage.cost_usd === 'number' && usage.cost_usd > 0) {
+    lines.push(`Cost: ${formatCostUsd(usage.cost_usd)}`)
+  }
+  return lines.join('\n')
+}
+
 /** Compact usage summary, e.g. "2 searches · 1.2k tokens · $0.0234". Empty when nothing to show.
  *  cost_usd (4.1-g) is the REAL cost from xAI; shown only when present (no estimate in chat). */
 export function formatUsage(usage: ChatUsage | undefined): string {
@@ -75,7 +100,7 @@ export function formatUsage(usage: ChatUsage | undefined): string {
   const parts: string[] = []
   const calls = usage.tool_calls ?? 0
   if (calls > 0) parts.push(`${calls} ${calls === 1 ? 'search' : 'searches'}`)
-  const tokens = (usage.input_tokens ?? 0) + (usage.output_tokens ?? 0)
+  const tokens = usage.total_tokens ?? (usage.input_tokens ?? 0) + (usage.output_tokens ?? 0)
   if (tokens > 0) parts.push(`${formatTokens(tokens)} tokens`)
   const cost = usage.cost_usd
   if (typeof cost === 'number' && cost > 0) parts.push(formatCostUsd(cost))

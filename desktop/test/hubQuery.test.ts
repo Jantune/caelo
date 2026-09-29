@@ -58,7 +58,17 @@ describe('modeTone', () => {
 })
 
 describe('eventTitle', () => {
-  it('uses text when present, else a mode fallback', () => {
+  it('prefers meta.prompt when present', () => {
+    expect(
+      eventTitle({
+        text: 'assistant response',
+        mode: 'chat',
+        meta: { prompt: 'user question' }
+      })
+    ).toBe('user question')
+  })
+
+  it('uses text when prompt is absent, else a mode fallback', () => {
     expect(eventTitle({ text: 'hello world', mode: 'chat' })).toBe('hello world')
     expect(eventTitle({ text: '   ', mode: 'video' })).toBe('(video)')
     expect(eventTitle({ text: '', mode: 'image' })).toBe('(image)')

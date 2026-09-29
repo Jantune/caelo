@@ -28,6 +28,7 @@ def stream_chat_with_tools(
     stop_flag: Optional[Callable[[], bool]] = None,
     reasoning_effort: Optional[str] = None,
 ) -> dict:
+    model = V.normalize_model(model)
     payload = {
         "model": model,
         "messages": messages,
@@ -67,7 +68,20 @@ def stream_chat_with_tools(
         r = _open(False)
 
     with r:
-        r.raise_for_status()
+        try:
+            r.raise_for_status()
+        except requests.exceptions.HTTPError as exc:
+            err_text = ""
+            try:
+                err_text = r.text
+            except Exception:
+                pass
+            if "client-side tools" in err_text.lower() or "beta access" in err_text.lower():
+                raise RuntimeError(
+                    f"Model '{model}' does not support client-side agent tools (xAI beta access required). "
+                    f"Please switch to grok-4.6, grok-4.5, or grok-build-0.1 for the Code Agent."
+                ) from exc
+            raise
         for raw in r.iter_lines(decode_unicode=False):
             if stop_flag and stop_flag():
                 break
